@@ -34,8 +34,10 @@ app.use(express.static("public"))
 
 // Importing routes
 const healthCheckRoute = require("./routes/healthcheck.route.js")
+const userRoute = require("./routes/user.route.js")
 
 // Using routes
 app.use("/", healthCheckRoute)
+app.use("/api/v1/users", userRoute)
 
 module.exports = app
