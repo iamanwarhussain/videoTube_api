@@ -4,6 +4,7 @@ const apiError = require("../utils/apiError.js")
 const User = require("../models/user.model.js")
 const { uploadOnCloudinary, removeImageFromCloudinary } = require("../utils/cloudinary.js")
 const jwt = require("jsonwebtoken")
+const { default: mongoose } = require("mongoose")
 
 async function generateToken(userId) {
 
@@ -357,11 +358,145 @@ const updateDetails = asyncHandler( async ( req, res ) => {
 })
 
 const getUserProfile = asyncHandler( async ( req, res ) => {
-    
+    const username = req.params
+
+    if(!username.trim()){
+        return res
+            .status(400)
+            .json(new apiError(400, "Username is required."))
+    }
+
+    const channel = await User.aggregate([
+        {
+            $match : {
+                username : username.toLowerCase()
+            }
+        },
+
+        {
+            $lookup : {
+                from : "subscriptions",
+                localField : "subscriber",
+                foreignField : "_id",
+                as : "subscribers"
+            }
+        },
+
+        {
+            $lookup : {
+                from : "subscriptions",
+                localField : "channel",
+                foreignField : "_id",
+                as : "subscribedTo"
+            }
+        },
+
+        {
+            $addFields : {
+                subscriberCount : {
+                    $size : "$subscribers"
+                },
+
+                subscribedToCount : {
+                    $size : "$subscribedTo"
+                },
+
+                isSubscriber : {
+                    $cond : {
+                        if : {
+                            $in : [req.user._id, "$subscribers.subscriber"],
+                            then : true,
+                            else : false
+                        }
+                    }
+                }
+            }
+        },
+
+        {
+            $project : {
+                fullname : 1,
+                username : 1,
+                email : 1,
+                profileImg : 1,
+                coverImage : 1,
+                subscriberCount : 1,
+                subscribedToCount : 1,
+                isSubscriber : 1,
+            }
+        }
+    ])
+
+    if(!channel.length){
+        return res
+            .status(404)
+            .json(new apiError(404, "Channel not found."))
+    }
+
+    return res
+        .status(200)
+        .json(new apiResponse(200, channel[0], "Profile fetched successfully."))
 })
 
 const getUserHistory = asyncHandler( async ( req, res ) => {
+    const user = await User.aggregate([
+        {
+            $match : {
+                _id : new mongoose.Types.ObjectId(req.user._id)
+            }
+        },
 
+        {
+            $lookup : {
+                from : "videos",
+                localField : "watchHistory",
+                foreignField : "_id",
+                as : "watchHistory",
+                pipeline : [
+                    {
+                        $lookup : {
+                            from : "users",
+                            localField : "owner",
+                            foreignField : "_id",
+                            as : "owner",
+                            pipeline : [
+                                {
+                                    $project : {
+                                        username : 1,
+                                        profileImg : 1
+                                    }
+                                }
+                            ]
+                        }
+                    },
+
+                    {
+                        $unwind : {
+                            path : "$owner",
+                            preserveNullAndEmptyArrays : true
+                        }
+                    }
+                ]
+            }
+        },
+
+        {
+            $project : {
+                watchHistory : 1,
+                owner : 1
+            }
+        }
+    ])
+
+    if(!user || !user.length){
+        return res
+            .status(404)
+            .json(new apiError(404, "User not found."))
+    }
+
+    return res
+        .status(200)
+        .json(new apiResponse(200, user[0], "WatchHistory fetched successfully."))
 })
 
 module.exports = {
