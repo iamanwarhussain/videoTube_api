@@ -3,6 +3,7 @@ const apiResponse = require("../utils/apiResponse.js")
 const apiError = require("../utils/apiError.js")
 const User = require("../models/user.model.js")
 const { uploadOnCloudinary, removeImageFromCloudinary } = require("../utils/cloudinary.js")
+const jwt = require("jsonwebtoken")
 
 async function generateToken(userId) {
 
@@ -15,7 +16,7 @@ async function generateToken(userId) {
 
     await user.save({validateBeforeSave : false})
 
-    return accessToken, refreshToken
+    return {accessToken, refreshToken}
 }
 
 const options = {
@@ -88,38 +89,290 @@ const registerUser = asyncHandler( async ( req, res ) => {
 })
 
 const loginUser = asyncHandler( async ( req, res ) => {
-    const {email, password} = req.body
 
-    if([email, password].some( field => field.trim() === "")){
+    const { email, password } = req.body
+
+    if(!email && !password){
         return res
             .status(400)
             .json(new apiError(400, "All fields are required."))
     }
 
-    
+    const user = await User.findOne({email})
+
+    if(!user){
+        return res
+            .status(404)
+            .json(new apiError(404, "User not found."))
+    }
+
+    const correctPassword = await user.isPasswordCorrect(password)
+
+    if(!correctPassword){
+        return res
+            .status(401)
+            .json(new apiError(401, "Incorrect password."))
+    }
+
+    const {accessToken, refreshToken} = await generateToken(user._id)
+
+    const loggedInUser = await User.findById(user._id).select("-password -refreshToken")
+
+    return res
+        .status(200)
+        .cookie("accessToken", accessToken, options)
+        .cookie("refreshToken", refreshToken, options)
+        .json(new apiResponse(
+            200,
+            {
+                user : loggedInUser, accessToken, refreshToken
+            },
+            "User logged in successfully."
+        ))
+
 })
 
 const logoutUser = asyncHandler( async ( req, res ) => {
+    const user = await User.findByIdAndUpdate(
+        req.user._id,
+        {
+            $unset : {
+                refreshToken : 1
+            }
+        }, 
+        {new : true}
+    )
+
+    return res
+        .status(200)
+        .clearCookies("accessToken", options)
+        .clearCookies("refreshToken", options)
+        .json(new apiResponse(200 , {}, "User logged out successfully"))
+})
+
+const refreshAccessToken = asyncHandler( async ( req, res) => {
+    
+    const incommingRefreshToken = req.cookies?.refreshToken || req.body?.refreshToken
+
+    if(!incommingRefreshToken){
+        return res 
+            .status(401)
+            .json(new apiError(401, "Unauthorized request."))
+    }
+
+    const decodedToken = await jwt.verify(incommingRefreshToken, process.env.REFRESH_TOKEN_KEY)
+
+    const user = await User.findById(decodedToken?._id).select("-password")
+
+    if(!user){
+        return res
+            .status(400)
+            json(new apiError(400, "Invalid refreshToken"))
+    }
+
+    if(incommingRefreshToken?._id !== user._id){
+        return res
+            .status(400)
+            json(new apiError(400, "RefreshToken expired."))
+    }
+    
+    const {accessToken, refreshToken} = generateToken(user._id)
+
+    return res
+        .status(200)
+        .cookies("accessToken", accessToken, options)
+        .cookies("refreshToken", refreshToken, options)
+        .json(new apiResponse(
+            200,
+            {
+                accessToken,
+                refreshToken
+            },
+            "accessToken refreshed."
+         ))
 
 })
 
 const changePassword = asyncHandler( async ( req, res ) => {
 
+    const {oldPassword, newPassword} = req.body
+
+    if(!oldPasswd || !newPasswd){
+        return res
+        .status(400)
+        .json(new apiError(400, "All fields are required"))
+    }
+
+    if(oldPasswd === newPasswd){
+        return res
+        .status(400)
+        .json(new apiError(400, "Current password and new password cannot be same"))
+    }
+
+    const user = await User.findById(req.user._id)
+
+    const isPasswordCorrect = user.isPasswordCorrect(oldPassword)
+
+    if(!isPasswordCorrect){
+        return res
+            .status(401)
+            .json(new apiError(401, "Previous password incorrect."))
+    }
+
+    user.password = newPassword
+    await user.save({validateBeforeSave : false})
+
+
 })
 
 const changeProfile = asyncHandler( async ( req, res ) => {
+    const profileImgLocalPath = req.file.profileImg?.path
+
+    if(!profileImgLocalPath){
+        return res
+            .status(400)
+            .json(new apiError(400, "Image file is required."))
+    }
+
+    try {
+        const profile = await uploadOnCloudinary(profileImgLocalPath)
+
+        if(!profile || !profile.url){
+            return res
+            .status(500)
+            .json(new apiError(500, "An errror occured while uploading file to cloudinary."))
+        }
+
+        const oldProfile = req.user.profileImg
+
+        if(oldProfile){
+            const publicId = oldProfile.split("/").pop().split(".")[0]
+            await removeImageFromCloudinary(publicId)
+        }
+
+        await User.findByIdAndUpdate(
+            req.user._id,
+            {
+                $set : {
+                    profileImg : profile.url
+                }
+            },
+            {new : true}
+        ).select("-password -refreshToken")
+
+        return res
+        .status(200)
+        .json(new apiResponse(200, {},  "Avatar updated successfully"))
+
+    } catch (error) {
+        return res
+            .status(400)
+            .json(new apiError(400 , "Something went wrong."))
+    }
 
 })
 
 const changeCoverImage = asyncHandler( async ( req, res ) => {
 
+    const coverImageLocalPath = req.file.coverImage?.path
+
+    if(!coverImageLocalPath){
+        return res
+            .status(400)
+            .json(new apiError(400, "Image file is required."))
+    }
+
+    try {
+        const coverImage = await uploadOnCloudinary(coverImageLocalPath)
+
+        if(!coverImage || !coverImage.url){
+            return res
+            .status(500)
+            .json(new apiError(500, "An errror occured while uploading file to cloudinary."))
+        }
+
+        const oldCoverImage = req.user.coverImage
+
+        if(oldCoverImage){
+            const publicId = oldCoverImage.split("/").pop().split(".")[0]
+            await removeImageFromCloudinary(publicId)
+        }
+
+        await User.findByIdAndUpdate(
+            req.user._id,
+            {
+                $set : {
+                    coverImage : coverImage.url
+                }
+            },
+            {new : true}
+        ).select("-password -refreshToken")
+
+        return res
+        .status(200)
+        .json(new apiResponse(200, {},  "Avatar updated successfully"))
+
+    } catch (error) {
+        return res
+            .status(400)
+            .json(new apiError(400 , "Something went wrong."))
+    }
+
 })
 
 const updateDetails = asyncHandler( async ( req, res ) => {
+    const {fullname, email, username} = req.body
+
+    const requiredFields = {}
+
+    if(fullname) requiredFields.fullname = fullname
+    if(email) requiredFields.email = email
+    if(username) requiredFields.username = username
+
+    if(Object.keys(requiredFields).length === 0){
+        return res
+            .status(400)
+            .json(new apiError(400, "Atleast one field is required."))
+    }
+
+    const user = await User.findByIdAndUpdate(
+        req.user._id,
+        {
+            $set : {
+                ...requiredFields
+            }
+        },
+        {new : true}
+    ).select("-password -refreshToken")
+
+    if(!user){
+        return res
+            .status(404)
+            .json(new apiError(404, "User not found."))
+    }
+
+    return res
+        .status(200)
+        .json(new apiResponse(200, user, "User details updated successfully."))
+})
+
+const getUserProfile = asyncHandler( async ( req, res ) => {
+    
+})
+
+const getUserHistory = asyncHandler( async ( req, res ) => {
 
 })
 
 module.exports = {
     registerUser,
-    loginUser
+    loginUser,
+    logoutUser,
+    refreshAccessToken,
+    changePassword,
+    changeProfile,
+    changeCoverImage,
+    updateDetails,
+    getUserProfile,
+    getUserHistory
 }
