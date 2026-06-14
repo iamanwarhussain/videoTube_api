@@ -44,6 +44,8 @@ router.route("/cover/img").post(verifyToken, upload.single("coverImage"), change
 
 router.route("/update").post(verifyToken, updateDetails)
 
+router.route("/:username").get(verifyToken, getUserProfile)
 
+router.route("/history").get(verifyToken, getUserHistory)
 
 module.exports = router
