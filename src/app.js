@@ -35,9 +35,11 @@ app.use(express.static("public"))
 // Importing routes
 const healthCheckRoute = require("./routes/healthcheck.route.js")
 const userRoute = require("./routes/user.route.js")
+const videoRoute = require("./routes/video.route.js")
 
 // Using routes
 app.use("/", healthCheckRoute)
 app.use("/api/v1/users", userRoute)
+app.use("/api/v1/videos", videoRoute)
 
 module.exports = app
