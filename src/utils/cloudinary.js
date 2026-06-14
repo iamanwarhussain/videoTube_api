@@ -36,7 +36,19 @@ const removeImageFromCloudinary = async (publicId) => {
     }
 }
 
+const removeVideoFromCloudinary = async (publicId) => {
+    try {
+        if(!publicId) return null
+        const respone = await cloudinary.uploader.destroy(publicId, { resource_type : "video"})
+        console.log(`${respone} : removed successfully.`)
+    } catch (error) {
+        console.log(`An error occured while removing file from cloudinary.`)
+        return null
+    }
+}
+
 module.exports = {
     uploadOnCloudinary,
-    removeImageFromCloudinary
+    removeImageFromCloudinary,
+    removeVideoFromCloudinary
 }
